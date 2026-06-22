@@ -1,6 +1,6 @@
 # 🤖 Chatbot de WhatsApp — Escape Room Santander
 
-Sistema de atención automatizada por WhatsApp con Inteligencia Artificial (Gemini 1.5 Pro de Google), construido sobre **FastAPI** (Python). Responde preguntas sobre juegos, precios, horarios y disponibilidad de forma natural, 24 horas al día.
+Sistema de atención automatizada por WhatsApp con Inteligencia Artificial (Gemini 2.5 Flash de Google), construido sobre **FastAPI** (Python). Responde preguntas sobre juegos, precios, horarios y disponibilidad de forma natural, 24 horas al día.
 
 ---
 
