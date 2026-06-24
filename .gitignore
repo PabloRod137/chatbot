@@ -1,0 +1,36 @@
+# === ARCHIVOS CONFIDENCIALES Y CREDENCIALES ===
+.env
+.env.local
+*.pem
+*.key
+
+# === BASES DE DATOS LOCALES ===
+# Bloquea específicamente el archivo que se coló y cualquier otra DB SQLite
+"base de datos del chatbot"
+*.db
+*.sqlite
+*.sqlite3
+
+# === CACHÉ DE PYTHON Y DEPENDENCIAS ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# === VOLÚMENES DE DOCKER (DATOS LOCALES) ===
+# Si en el futuro guardas datos de contenedores en una carpeta local
+.docker-data/
+mysql_data/
+
+# === ARCHIVOS DEL SISTEMA OPERATIVO ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === CONFIGURACIONES DE EDITORES (IDE) ===
+.vscode/
+.idea/

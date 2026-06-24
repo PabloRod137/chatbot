@@ -1,5 +1,11 @@
 import os
+import uuid
+import hmac
+import hashlib
+import json
 from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
@@ -15,32 +21,63 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "pimia_secret_santander_2026")
 
 app = FastAPI(title=APP_NAME)
 
-# ... (añade esto al principio, justo después de app = FastAPI(title=APP_NAME))
-
-from fastapi.middleware.cors import CORSMiddleware
+# Obtener y estructurar orígenes permitidos para CORS (evitando "*")
+origins_raw = os.getenv("ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = [origin.strip() for origin in origins_raw.split(",") if origin.strip()]
+if not ALLOWED_ORIGINS:
+    # Dominios de confianza por defecto (desarrollo y producción)
+    ALLOWED_ORIGINS = ["https://escaperoomsantander.es", "http://localhost:3000", "http://localhost:8050"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Constantes para la validación de entrada amigable
+MSG_EMPTY_ERROR = "¡Hola! Parece que el mensaje está vacío. ¿En qué puedo ayudarte hoy? 🙂"
+MSG_LONG_ERROR = "Tu mensaje es un poco largo, ¿puedes resumirlo en pocas frases? Así puedo ayudarte mejor 🙂"
+
+
 # ... (al final del archivo, antes del bloque if __name__ == "__main__":)
 
 @app.post("/chat-web")
-async def chat_web(data: dict):
+async def chat_web(request: Request, response: Response, data: dict = None):
+    if data is None:
+        return PlainTextResponse(content=MSG_EMPTY_ERROR, status_code=400)
+        
     mensaje = data.get("mensaje")
-    # Usamos un ID fijo para usuarios de la web
-    phone_number = "web_user" 
     
-    # Guardamos y generamos respuesta (igual que en WhatsApp)
-    save_message(phone_number, "user", mensaje)
-    history = get_history(phone_number, limit=5)
+    # Validación de mensaje vacío, None o solo espacios
+    if mensaje is None or not str(mensaje).strip():
+        return PlainTextResponse(content=MSG_EMPTY_ERROR, status_code=400)
+        
+    # Validación de longitud máxima (1000 caracteres)
+    if len(str(mensaje)) > 1000:
+        return PlainTextResponse(content=MSG_LONG_ERROR, status_code=400)
+        
+    # Obtener o generar session_id
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        response.set_cookie(
+            key="session_id",
+            value=session_id,
+            httponly=True,
+            secure=True,
+            samesite="none"
+        )
+    
+    # Guardamos y generamos respuesta (usando session_id)
+    save_message(session_id, "user", mensaje)
+    history = get_history(session_id, limit=5)
     ai_response = generate_response(mensaje, history)
-    save_message(phone_number, "assistant", ai_response)
+    save_message(session_id, "assistant", ai_response)
     
     return {"respuesta": ai_response}
+
 
 @app.on_event("startup")
 def on_startup():
@@ -58,7 +95,7 @@ def verify_webhook(request: Request):
     challenge = request.query_params.get("hub.challenge")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("✅ WEBHOOK VALIDADO POR META")
+        print("[Webhook OK] WEBHOOK VALIDADO POR META")
         return Response(content=str(challenge), media_type="text/plain")
     
     return Response(content="Error de validación", status_code=403)
@@ -67,7 +104,35 @@ def verify_webhook(request: Request):
 @app.post("/webhook")
 async def receive_message(request: Request):
     try:
-        body = await request.json()
+        # Validación de firma de Meta
+        app_secret = os.getenv("APP_SECRET", "")
+        signature_header = request.headers.get("X-Hub-Signature-256")
+        
+        # Obtener el cuerpo de la petición en bruto
+        raw_body = await request.body()
+        
+        # Validar firma si falta o es inválida
+        if not signature_header or not signature_header.startswith("sha256="):
+            print("[Webhook ERROR] Webhook rechazado: Firma de Meta faltante o malformada.")
+            raise HTTPException(status_code=403, detail="Firma de webhook faltante o malformada")
+        
+        expected_signature = signature_header.split("sha256=")[1]
+        
+        computed_signature = hmac.new(
+            app_secret.encode('utf-8'),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(computed_signature, expected_signature):
+            print("[Webhook ERROR] Webhook rechazado: Verificación de firma de Meta fallida.")
+            raise HTTPException(status_code=403, detail="Verificación de firma de Meta fallida")
+        
+        # Parsear el cuerpo JSON
+        try:
+            body = json.loads(raw_body.decode('utf-8'))
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Cuerpo de petición JSON inválido")
         
         if body.get("object") == "whatsapp_business_account":
             for entry in body.get("entry", []):
@@ -80,7 +145,7 @@ async def receive_message(request: Request):
                             
                             if msg_type == "text":
                                 content = message.get("text", {}).get("body", "")
-                                print(f"📩 Mensaje recibido de {phone_number}: {content}")
+                                print(f"[Webhook msg] Mensaje recibido de {phone_number}: {content}")
                                 
                                 # 1. Guardar mensaje del usuario
                                 save_message(phone_number, "user", content)
@@ -89,7 +154,7 @@ async def receive_message(request: Request):
                                 history = get_history(phone_number, limit=5)
                                 
                                 # 3. Generar respuesta con la IA de Gemini
-                                print("🧠 Pensando respuesta con Gemini...")
+                                print("[LLM] Pensando respuesta con Gemini...")
                                 ai_response = generate_response(content, history)
                                 
                                 # 4. Guardar respuesta de la IA
@@ -102,8 +167,11 @@ async def receive_message(request: Request):
         else:
             raise HTTPException(status_code=404, detail="No es un evento de WhatsApp")
             
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        print(f"❌ Error procesando webhook: {e}")
+        import traceback
+        print(f"[Webhook ERROR] Error procesando webhook:\n{traceback.format_exc()}")
         return {"status": "error"}
 
 if __name__ == "__main__":

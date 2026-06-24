@@ -34,12 +34,21 @@ def send_whatsapp_message(to_phone: str, message: str):
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=10)
         response.raise_for_status()
         logger.info(f"Mensaje enviado con éxito a {to_phone}")
         return True
+    except requests.exceptions.Timeout as te:
+        import traceback
+        logger.error(f"Timeout enviando mensaje a WhatsApp (10s):\n{traceback.format_exc()}")
+        return False
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error enviando mensaje a WhatsApp: {e}")
+        import traceback
+        logger.error(f"Error enviando mensaje a WhatsApp:\n{traceback.format_exc()}")
         if e.response is not None:
             logger.error(f"Detalles: {e.response.text}")
+        return False
+    except Exception as e:
+        import traceback
+        logger.error(f"Error inesperado enviando mensaje a WhatsApp:\n{traceback.format_exc()}")
         return False

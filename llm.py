@@ -52,15 +52,24 @@ def generate_response(message: str, history: list) -> str:
     }
 
     try:
-        response = requests.post(url, json=payload, headers={'Content-Type': 'application/json'})
+        response = requests.post(url, json=payload, headers={'Content-Type': 'application/json'}, timeout=10)
         response.raise_for_status()
         data = response.json()
         
         # Extraemos el texto de la respuesta de Google
         return data["candidates"][0]["content"]["parts"][0]["text"]
         
+    except requests.exceptions.Timeout as te:
+        import traceback
+        print(f"[Timeout ERROR] Timeout conectando con Gemini (10s):\n{traceback.format_exc()}")
+        return "Lo siento, ha ocurrido un error técnico procesando tu mensaje. Inténtalo de nuevo."
+    except requests.exceptions.RequestException as re:
+        import traceback
+        print(f"[Request ERROR] Error de red conectando con Gemini:\n{traceback.format_exc()}")
+        if re.response is not None:
+            print(f"Detalles: {re.response.text}")
+        return "Lo siento, ha ocurrido un error técnico procesando tu mensaje. Inténtalo de nuevo."
     except Exception as e:
-        print(f"❌ Error conectando con Gemini: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"Detalles: {e.response.text}")
+        import traceback
+        print(f"[Unexpected ERROR] Error inesperado conectando con Gemini:\n{traceback.format_exc()}")
         return "Lo siento, ha ocurrido un error técnico procesando tu mensaje. Inténtalo de nuevo."
