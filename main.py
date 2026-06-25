@@ -19,6 +19,10 @@ from whatsapp import send_whatsapp_message
 APP_NAME = os.getenv("APP_NAME", "Escape Room Santander")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "pimia_secret_santander_2026")
 
+# LEER EL APP SECRET DE META DE FORMA SEGURA
+# Usamos "META_APP_SECRET" para evitar conflictos, o el tuyo por defecto
+APP_SECRET = os.getenv("META_APP_SECRET") or os.getenv("APP_SECRET", "")
+
 app = FastAPI(title=APP_NAME)
 
 # Obtener y estructurar orígenes permitidos para CORS (evitando "*")
@@ -40,8 +44,6 @@ app.add_middleware(
 MSG_EMPTY_ERROR = "¡Hola! Parece que el mensaje está vacío. ¿En qué puedo ayudarte hoy? 🙂"
 MSG_LONG_ERROR = "Tu mensaje es un poco largo, ¿puedes resumirlo en pocas frases? Así puedo ayudarte mejor 🙂"
 
-
-# ... (al final del archivo, antes del bloque if __name__ == "__main__":)
 
 @app.post("/chat-web")
 async def chat_web(request: Request, response: Response, data: dict = None):
@@ -87,6 +89,7 @@ def on_startup():
 def read_root():
     return {"status": "online", "message": f"{APP_NAME} funcionando al 100%."}
 
+
 # --- BLOQUE DE VERIFICACIÓN (Ya validado por Meta) ---
 @app.get("/webhook")
 def verify_webhook(request: Request):
@@ -100,40 +103,43 @@ def verify_webhook(request: Request):
     
     return Response(content="Error de validación", status_code=403)
 
+
 # --- BLOQUE PARA RECIBIR Y RESPONDER MENSAJES REALES ---
 @app.post("/webhook")
 async def receive_message(request: Request):
     try:
-        # Validación de firma de Meta
-        app_secret = os.getenv("APP_SECRET", "")
+        # 1. Validación de seguridad estricta de la firma de Meta
         signature_header = request.headers.get("X-Hub-Signature-256")
-        
-        # Obtener el cuerpo de la petición en bruto
         raw_body = await request.body()
         
-        # Validar firma si falta o es inválida
+        if not APP_SECRET:
+            print("[Webhook ERROR] Falta definir META_APP_SECRET en el .env")
+            raise HTTPException(status_code=500, detail="Error de configuración interna.")
+
         if not signature_header or not signature_header.startswith("sha256="):
             print("[Webhook ERROR] Webhook rechazado: Firma de Meta faltante o malformada.")
             raise HTTPException(status_code=403, detail="Firma de webhook faltante o malformada")
         
         expected_signature = signature_header.split("sha256=")[1]
         
+        # Cómputo seguro usando la clave secreta
         computed_signature = hmac.new(
-            app_secret.encode('utf-8'),
+            APP_SECRET.encode('utf-8'),
             raw_body,
             hashlib.sha256
         ).hexdigest()
         
         if not hmac.compare_digest(computed_signature, expected_signature):
-            print("[Webhook ERROR] Webhook rechazado: Verificación de firma de Meta fallida.")
+            print(f"[Webhook ERROR] Firma no coincide. Esperada: {expected_signature} | Calculada: {computed_signature}")
             raise HTTPException(status_code=403, detail="Verificación de firma de Meta fallida")
         
-        # Parsear el cuerpo JSON
+        # 2. Parsear el cuerpo JSON una vez asegurado que viene de Meta
         try:
             body = json.loads(raw_body.decode('utf-8'))
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Cuerpo de petición JSON inválido")
         
+        # 3. Procesamiento de los eventos de WhatsApp Business Account
         if body.get("object") == "whatsapp_business_account":
             for entry in body.get("entry", []):
                 for change in entry.get("changes", []):
@@ -147,20 +153,20 @@ async def receive_message(request: Request):
                                 content = message.get("text", {}).get("body", "")
                                 print(f"[Webhook msg] Mensaje recibido de {phone_number}: {content}")
                                 
-                                # 1. Guardar mensaje del usuario
+                                # Guardar mensaje del usuario (usando su número como id de sesión)
                                 save_message(phone_number, "user", content)
                                 
-                                # 2. Obtener historial (memoria del bot)
+                                # Obtener historial reciente para que Gemini tenga contexto
                                 history = get_history(phone_number, limit=5)
                                 
-                                # 3. Generar respuesta con la IA de Gemini
+                                # Generar respuesta inteligente con Gemini 2.5 Flash
                                 print("[LLM] Pensando respuesta con Gemini...")
                                 ai_response = generate_response(content, history)
                                 
-                                # 4. Guardar respuesta de la IA
+                                # Guardar la respuesta generada
                                 save_message(phone_number, "assistant", ai_response)
                                 
-                                # 5. Enviar mensaje de vuelta por WhatsApp
+                                # Enviar de vuelta a WhatsApp la respuesta final
                                 send_whatsapp_message(phone_number, ai_response)
             
             return {"status": "success"}
@@ -176,5 +182,5 @@ async def receive_message(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    # Si al final usaste el puerto 8050 en el paso anterior, cámbialo aquí también.
+    # Corre en el puerto 8050
     uvicorn.run("main:app", host="0.0.0.0", port=8050, reload=True)
